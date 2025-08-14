@@ -1,0 +1,129 @@
+[8/14, 8:28 AM] Arish: #include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+
+#define BUFFER_SIZE 1024
+
+int main() {
+    int clientSock, port = 9002, winSize;
+    struct sockaddr_in serverAddr;
+    char data[BUFFER_SIZE], ack;
+    int base = 0;
+
+    clientSock = socket(AF_INET, SOCK_STREAM, 0);
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+
+    connect(clientSock, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
+
+    printf("Enter window size: ");
+    scanf("%d", &winSize);
+    getchar(); // clear newline
+
+    printf("Enter data to send: ");
+    fgets(data, sizeof(data), stdin);
+    data[strcspn(data, "\n")] = '\0'; // remove newline
+
+    int len = strlen(data);
+
+    while (base < len) {
+        int framesToSend = (len - base < winSize) ? (len - base) : winSize;
+
+        // Send number of frames in this window
+        write(clientSock, &framesToSend, sizeof(int));
+
+        printf("\nSending window: ");
+        for (int i = 0; i < framesToSend; i++) {
+            printf("%c ", data[base + i]);
+            write(clientSock, &data[base + i], 1);
+        }
+        printf("\n");
+
+        // Wait for ACKs after the window is sent
+        int ackCount = 0;
+        for (int i = 0; i < framesToSend; i++) {
+            if (read(clientSock, &ack, 1) > 0) {
+                printf("ACK received: %c\n", ack);
+                ackCount++;
+            } else {
+                printf("ACK lost! Go back to frame %c\n", data[base + i]);
+                base += i; // go back to lost frame
+                goto resend; // restart sending from lost frame
+            }
+        }
+
+        base += framesToSend;
+
+    resend:;
+    }
+
+    // End transmission
+    int endSignal = -1;
+    write(clientSock, &endSignal, sizeof(int));
+
+    close(clientSock);
+    return 0;
+}
+[8/14, 8:28 AM] Arish: #include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+
+#define BUFFER_SIZE 1024
+
+int main() {
+    int serverSock, clientSock, port = 9002;
+    char frame, ack[10];
+    struct sockaddr_in serverAddr, clientAddr;
+    socklen_t addr_size;
+
+    serverSock = socket(AF_INET, SOCK_STREAM, 0);
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    memset(serverAddr.sin_zero, '\0', sizeof serverAddr.sin_zero);
+
+    bind(serverSock, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
+    listen(serverSock, 5);
+    printf("Server waiting on port %d...\n", port);
+
+    addr_size = sizeof(clientAddr);
+    clientSock = accept(serverSock, (struct sockaddr *)&clientAddr, &addr_size);
+    printf("Client connected.\n");
+
+    while (1) {
+        int winCount;
+        if (read(clientSock, &winCount, sizeof(int)) <= 0) break;
+        if (winCount == -1) break; // end signal
+
+        printf("\n-- Receiving window of %d frames --\n", winCount);
+
+        char frames[BUFFER_SIZE];
+        for (int i = 0; i < winCount; i++) {
+            if (read(clientSock, &frame, 1) <= 0) return 0;
+            frames[i] = frame;
+            printf("Received frame: %c\n", frame);
+        }
+
+        // Ask for ACKs after the window is received
+        for (int i = 0; i < winCount; i++) {
+            printf("Enter ACK for %c (press Enter/space to simulate loss): ", frames[i]);
+            fgets(ack, sizeof(ack), stdin);
+            if (ack[0] == '\n' || ack[0] == ' ') {
+                printf("Simulating ACK loss for frame %c\n", frames[i]);
+                // Send nothing for loss
+            } else {
+                write(clientSock, &frames[i], 1);
+                printf("ACK %c sent\n", frames[i]);
+            }
+        }
+    }
+
+    close(clientSock);
+    close(serverSock);
+    return 0;
+}
